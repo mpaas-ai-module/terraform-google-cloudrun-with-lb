@@ -41,9 +41,29 @@ variable "vpc_connector_self_link" {
   description = "The self link of host project vpc connector"
 }
 
-variable "existing_ssl_name" {
+# -----------------------------
+# SSL CERTIFICATE (created from cert/key files in a platform GCS bucket)
+# -----------------------------
+variable "ssl_bucket" {
   type        = string
-  description = "Name of existing SSL certificate in GCP"
+  description = "Name of the GCS bucket holding the TLS certificate and private key files."
+}
+
+variable "ssl_certificate_name" {
+  type        = string
+  description = "Name to give the LB SSL certificate resource created from the bucket files."
+}
+
+variable "ssl_cert_object" {
+  type        = string
+  description = "Path/glob of the certificate (.crt) object within ssl_bucket."
+  default     = "*.crt"
+}
+
+variable "ssl_key_object" {
+  type        = string
+  description = "Path/glob of the private key (.key) object within ssl_bucket."
+  default     = "*.key"
 }
 
 variable "backend_protocol" {

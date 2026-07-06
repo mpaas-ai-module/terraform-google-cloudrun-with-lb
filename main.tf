@@ -69,20 +69,46 @@ resource "google_compute_region_network_endpoint_group" "neg" {
 ############################
 # SSL CERTIFICATES
 ############################
+# Cert + key are read from a platform-owned GCS bucket and the LB certificate
+# is CREATED from their contents (matches upstream bootlabstech/…-cloudrun-with-lb).
+# This replaces the previous data-lookup of a pre-existing cert, which failed in
+# freshly provisioned projects where no such cert exists.
+
+data "google_storage_bucket_object_content" "certificate" {
+  bucket = var.ssl_bucket
+  name   = var.ssl_cert_object
+}
+
+data "google_storage_bucket_object_content" "private_key" {
+  bucket = var.ssl_bucket
+  name   = var.ssl_key_object
+}
 
 # External (Global)
-data "google_compute_ssl_certificate" "external_ssl" {
-  count   = local.is_external ? 1 : 0
-  name    = var.existing_ssl_name
-  project = var.project
+resource "google_compute_ssl_certificate" "external_ssl" {
+  count       = local.is_external ? 1 : 0
+  name        = var.ssl_certificate_name
+  project     = var.project
+  private_key = data.google_storage_bucket_object_content.private_key.content
+  certificate = data.google_storage_bucket_object_content.certificate.content
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Internal (Regional)
-data "google_compute_region_ssl_certificate" "internal_ssl" {
-  count   = local.is_internal ? 1 : 0
-  name    = var.existing_ssl_name
-  project = var.project
-  region  = "${var.cloudrun_location}"
+resource "google_compute_region_ssl_certificate" "internal_ssl" {
+  count       = local.is_internal ? 1 : 0
+  name        = var.ssl_certificate_name
+  project     = var.project
+  region      = "${var.cloudrun_location}"
+  private_key = data.google_storage_bucket_object_content.private_key.content
+  certificate = data.google_storage_bucket_object_content.certificate.content
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 ############################
@@ -155,7 +181,7 @@ resource "google_compute_target_https_proxy" "external_proxy" {
   name             = "${var.cloudrun_name}-proxy"
   project          = var.project
   url_map          = google_compute_url_map.external_url_map[0].id
-  ssl_certificates = [data.google_compute_ssl_certificate.external_ssl[0].self_link]
+  ssl_certificates = [google_compute_ssl_certificate.external_ssl[0].self_link]
 }
 
 # Internal
@@ -165,7 +191,7 @@ resource "google_compute_region_target_https_proxy" "internal_proxy" {
   project          = var.project
   region           = "${var.cloudrun_location}"
   url_map          = google_compute_region_url_map.internal_url_map[0].id
-  ssl_certificates = [data.google_compute_region_ssl_certificate.internal_ssl[0].self_link]
+  ssl_certificates = [google_compute_region_ssl_certificate.internal_ssl[0].self_link]
 }
 
 ############################
