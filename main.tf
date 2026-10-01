@@ -1,32 +1,88 @@
+resource "google_project_service" "run-api" {
+  project            = var.project
+  service            = "run.googleapis.com"
+  disable_on_destroy = false
+}
+
 resource "google_project_service" "vpcaccess-api" {
-  project = var.project
-  service = "vpcaccess.googleapis.com"
+  project            = var.project
+  service            = "vpcaccess.googleapis.com"
+  disable_on_destroy = false
+}
+
+data "google_project" "consumer_project" {
+  project_id = var.project
+}
+
+resource "google_project_service_identity" "run_sa" {
+  provider = google-beta
+  project  = var.project
+  service  = "run.googleapis.com"
+
+  depends_on = [
+    google_project_service.run-api
+  ]
+}
+
+resource "time_sleep" "wait_for_run_sa" {
+  create_duration = "60s"
+
+  depends_on = [
+    google_project_service_identity.run_sa
+  ]
+}
+
+resource "google_project_iam_member" "run_network_user" {
+  project = var.host_project_id
+  role    = "roles/compute.networkUser"
+  member  = "serviceAccount:service-${data.google_project.consumer_project.number}@serverless-robot-prod.iam.gserviceaccount.com"
+
+  depends_on = [
+    time_sleep.wait_for_run_sa
+  ]
+  lifecycle {
+    prevent_destroy = false
+  }
+
+}
+
+resource "google_project_iam_member" "run_vpcaccess_user" {
+  project = var.host_project_id
+  role    = "roles/vpcaccess.user"
+  member  = "serviceAccount:service-${data.google_project.consumer_project.number}@serverless-robot-prod.iam.gserviceaccount.com"
+
+  depends_on = [
+    time_sleep.wait_for_run_sa
+  ]
+  lifecycle {
+    prevent_destroy = false
+  }
 }
 
 resource "google_cloud_run_service" "default" {
   name     = var.cloudrun_name
   location = var.cloudrun_location
   project  = var.project
+
   metadata {
     annotations = {
       "run.googleapis.com/ingress" = var.ingress
     }
   }
+
   template {
     metadata {
       annotations = {
-        # Limit scale up to prevent any cost blow outs!
         "autoscaling.knative.dev/maxScale"        = var.max_scale
         "run.googleapis.com/vpc-access-connector" = var.vpc_connector_self_link
         "run.googleapis.com/vpc-access-egress"    = var.egress_traffic
-
-
       }
     }
 
     spec {
       containers {
         image = var.cloudrun_image
+
         resources {
           limits = {
             cpu    = var.cloudrun_cpu
@@ -36,43 +92,37 @@ resource "google_cloud_run_service" "default" {
       }
     }
   }
+
   lifecycle {
     ignore_changes = [
       template[0].spec[0].containers[0].env
     ]
   }
+
+  depends_on = [
+    google_project_iam_member.run_network_user,
+    google_project_iam_member.run_vpcaccess_user
+  ]
 }
 
-############################
-# LOCALS
-############################
 locals {
   is_internal = var.lb_type == "internal"
   is_external = var.lb_type == "external"
 }
 
-############################
-# SERVERLESS NEG (COMMON)
-############################
+
 resource "google_compute_region_network_endpoint_group" "neg" {
   name                  = "${var.cloudrun_name}-neg"
   project               = var.project
-  region                = "${var.cloudrun_location}"
+  region                = var.cloudrun_location
   network_endpoint_type = "SERVERLESS"
 
   cloud_run {
     service = google_cloud_run_service.default.name
   }
-  depends_on = [ google_cloud_run_service.default ]
+  depends_on = [google_cloud_run_service.default]
 }
 
-############################
-# SSL CERTIFICATES
-############################
-# Cert + key are read from a platform-owned GCS bucket and the LB certificate
-# is CREATED from their contents (matches upstream bootlabstech/…-cloudrun-with-lb).
-# This replaces the previous data-lookup of a pre-existing cert, which failed in
-# freshly provisioned projects where no such cert exists.
 
 data "google_storage_bucket_object_content" "certificate" {
   bucket = var.ssl_bucket
@@ -84,11 +134,12 @@ data "google_storage_bucket_object_content" "private_key" {
   name   = var.ssl_key_object
 }
 
-# External (Global)
 resource "google_compute_ssl_certificate" "external_ssl" {
-  count       = local.is_external ? 1 : 0
-  name        = var.ssl_certificate_name
-  project     = var.project
+  count = local.is_external ? 1 : 0
+
+  name    = var.ssl_certificate_name
+  project = var.project
+
   private_key = data.google_storage_bucket_object_content.private_key.content
   certificate = data.google_storage_bucket_object_content.certificate.content
 
@@ -96,13 +147,13 @@ resource "google_compute_ssl_certificate" "external_ssl" {
     create_before_destroy = true
   }
 }
-
-# Internal (Regional)
 resource "google_compute_region_ssl_certificate" "internal_ssl" {
-  count       = local.is_internal ? 1 : 0
-  name        = var.ssl_certificate_name
-  project     = var.project
-  region      = "${var.cloudrun_location}"
+  count = local.is_internal ? 1 : 0
+
+  name    = var.ssl_certificate_name
+  project = var.project
+  region  = var.cloudrun_location
+
   private_key = data.google_storage_bucket_object_content.private_key.content
   certificate = data.google_storage_bucket_object_content.certificate.content
 
@@ -117,16 +168,16 @@ resource "google_compute_region_ssl_certificate" "internal_ssl" {
 
 # External Backend (GLOBAL)
 resource "google_compute_backend_service" "external_backend" {
-  count                  = local.is_external ? 1 : 0
-  name                   = "${var.cloudrun_name}-backend"
-  project                = var.project
-  protocol               = var.backend_protocol
-  load_balancing_scheme  = var.external_lb_scheme
-  timeout_sec            = var.backend_timeout
+  count                 = local.is_external ? 1 : 0
+  name                  = "${var.cloudrun_name}-backend"
+  project               = var.project
+  protocol              = var.backend_protocol
+  load_balancing_scheme = var.external_lb_scheme
+  timeout_sec           = var.backend_timeout
 
   backend {
-    group = google_compute_region_network_endpoint_group.neg.id
-    balancing_mode = "UTILIZATION"
+    group           = google_compute_region_network_endpoint_group.neg.id
+    balancing_mode  = "UTILIZATION"
     capacity_scaler = var.capacity_scaler
   }
 
@@ -135,24 +186,22 @@ resource "google_compute_backend_service" "external_backend" {
 
 # Internal Backend (REGIONAL)
 resource "google_compute_region_backend_service" "internal_backend" {
-  count                  = local.is_internal ? 1 : 0
-  name                   = "${var.cloudrun_name}-backend"
-  project                = var.project
-  region                 = "${var.cloudrun_location}"
-  protocol               = var.backend_protocol
-  load_balancing_scheme  = var.internal_lb_scheme
-  timeout_sec            = var.backend_timeout
+  count                 = local.is_internal ? 1 : 0
+  name                  = "${var.cloudrun_name}-backend"
+  project               = var.project
+  region                = var.cloudrun_location
+  protocol              = var.backend_protocol
+  load_balancing_scheme = var.internal_lb_scheme
+  timeout_sec           = var.backend_timeout
 
   backend {
-    group = google_compute_region_network_endpoint_group.neg.id
-    balancing_mode = "UTILIZATION"
+    group           = google_compute_region_network_endpoint_group.neg.id
+    balancing_mode  = "UTILIZATION"
     capacity_scaler = var.capacity_scaler
   }
 }
 
-############################
-# URL MAP
-############################
+
 
 # External
 resource "google_compute_url_map" "external_url_map" {
@@ -167,13 +216,11 @@ resource "google_compute_region_url_map" "internal_url_map" {
   count           = local.is_internal ? 1 : 0
   name            = "${var.cloudrun_name}-url-map"
   project         = var.project
-  region          = "${var.cloudrun_location}"
+  region          = var.cloudrun_location
   default_service = google_compute_region_backend_service.internal_backend[0].id
 }
 
-############################
-# TARGET HTTPS PROXY
-############################
+
 
 # External
 resource "google_compute_target_https_proxy" "external_proxy" {
@@ -189,14 +236,12 @@ resource "google_compute_region_target_https_proxy" "internal_proxy" {
   count            = local.is_internal ? 1 : 0
   name             = "${var.cloudrun_name}-proxy"
   project          = var.project
-  region           = "${var.cloudrun_location}"
+  region           = var.cloudrun_location
   url_map          = google_compute_region_url_map.internal_url_map[0].id
   ssl_certificates = [google_compute_region_ssl_certificate.internal_ssl[0].self_link]
 }
 
-############################
-# IP ADDRESS
-############################
+
 
 # External
 resource "google_compute_global_address" "external_ip" {
@@ -211,7 +256,7 @@ resource "google_compute_address" "internal_ip" {
   count        = local.is_internal ? 1 : 0
   name         = "${var.cloudrun_name}-ip"
   project      = var.project
-  region       = "${var.cloudrun_location}"
+  region       = var.cloudrun_location
   address_type = "INTERNAL"
   subnetwork   = var.subnetwork
 }
@@ -222,34 +267,32 @@ resource "google_compute_address" "internal_ip" {
 
 # External
 resource "google_compute_global_forwarding_rule" "external_fr" {
-  count                  = local.is_external ? 1 : 0
-  name                   = "${var.cloudrun_name}-fr"
-  project                = var.project
-  target                 = google_compute_target_https_proxy.external_proxy[0].id
-  port_range             = var.global_fw_portrange
-  ip_protocol            = var.global_fw_ipprotocol
-  load_balancing_scheme  = "EXTERNAL"
-  ip_address             = google_compute_global_address.external_ip[0].address
+  count                 = local.is_external ? 1 : 0
+  name                  = "${var.cloudrun_name}-fr"
+  project               = var.project
+  target                = google_compute_target_https_proxy.external_proxy[0].id
+  port_range            = var.global_fw_portrange
+  ip_protocol           = var.global_fw_ipprotocol
+  load_balancing_scheme = "EXTERNAL"
+  ip_address            = google_compute_global_address.external_ip[0].address
 }
 
 # Internal
 resource "google_compute_forwarding_rule" "internal_fr" {
-  count                  = local.is_internal ? 1 : 0
-  name                   = "${var.cloudrun_name}-fr"
-  project                = var.project
-  region                 = "${var.cloudrun_location}"
-  target                 = google_compute_region_target_https_proxy.internal_proxy[0].id
-  port_range             = var.global_fw_portrange
-  ip_protocol            = var.global_fw_ipprotocol
-  load_balancing_scheme  = "INTERNAL_MANAGED"
-  network                = var.network
-  subnetwork             = var.subnetwork
-  ip_address             = google_compute_address.internal_ip[0].address
+  count                 = local.is_internal ? 1 : 0
+  name                  = "${var.cloudrun_name}-fr"
+  project               = var.project
+  region                = var.cloudrun_location
+  target                = google_compute_region_target_https_proxy.internal_proxy[0].id
+  port_range            = var.global_fw_portrange
+  ip_protocol           = var.global_fw_ipprotocol
+  load_balancing_scheme = "INTERNAL_MANAGED"
+  network               = var.network
+  subnetwork            = var.subnetwork
+  ip_address            = google_compute_address.internal_ip[0].address
 }
 
-############################
-# CLOUD ARMOR (EXTERNAL ONLY)
-############################
+
 
 resource "google_compute_security_policy" "ext_policy" {
   count   = local.is_external ? 1 : 0

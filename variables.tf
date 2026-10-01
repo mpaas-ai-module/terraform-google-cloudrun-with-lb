@@ -33,7 +33,7 @@ variable "max_scale" {
 variable "egress_traffic" {
   description = "Allowed egress for the connector.Can be either of private-ranges-only and all-traffic."
   type        = string
-  default = "private-ranges-only"
+  default     = "private-ranges-only"
 }
 
 variable "vpc_connector_self_link" {
@@ -41,30 +41,10 @@ variable "vpc_connector_self_link" {
   description = "The self link of host project vpc connector"
 }
 
-# -----------------------------
-# SSL CERTIFICATE (created from cert/key files in a platform GCS bucket)
-# -----------------------------
-variable "ssl_bucket" {
-  type        = string
-  description = "Name of the GCS bucket holding the TLS certificate and private key files."
-}
-
-variable "ssl_certificate_name" {
-  type        = string
-  description = "Name to give the LB SSL certificate resource created from the bucket files."
-}
-
-variable "ssl_cert_object" {
-  type        = string
-  description = "Path/glob of the certificate (.crt) object within ssl_bucket."
-  default     = "*.crt"
-}
-
-variable "ssl_key_object" {
-  type        = string
-  description = "Path/glob of the private key (.key) object within ssl_bucket."
-  default     = "*.key"
-}
+# variable "existing_ssl_name" {
+#   type        = string
+#   description = "Name of existing SSL certificate in GCP"
+# }
 
 variable "backend_protocol" {
   type        = string
@@ -134,7 +114,35 @@ variable "external_lb_scheme" {
 }
 
 variable "capacity_scaler" {
-  type = number
+  type        = number
   description = "capacity scaler"
-  default = 1.0
+  default     = 1.0
+}
+# SSL BUCKET to create SSL CERTIFICATE automatically
+
+variable "ssl_bucket" {
+  description = "Name of the Google Cloud Storage bucket containing the SSL certificate and private key."
+  type        = string
+}
+
+variable "ssl_cert_object" {
+  description = "Name of the SSL certificate file stored in the GCS bucket."
+  type        = string
+  default     = "*.crt"
+}
+
+variable "ssl_key_object" {
+  description = "Name of the private key file stored in the GCS bucket."
+  type        = string
+  default     = "*.key"
+}
+
+variable "ssl_certificate_name" {
+  description = "Name to assign to the Google Cloud SSL certificate resource."
+  type        = string
+}
+
+variable "host_project_id" {
+  description = "host project id to add access to cloud run service agent"
+  type        = string
 }
