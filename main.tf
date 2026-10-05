@@ -104,6 +104,15 @@ resource "google_cloud_run_service" "default" {
     google_project_iam_member.run_vpcaccess_user
   ]
 }
+resource "google_cloud_run_service_iam_member" "public_invoker" {
+  project  = var.project
+  location = var.cloudrun_location
+  service  = google_cloud_run_service.default.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+
+  depends_on = [google_cloud_run_service.default]
+}
 
 locals {
   is_internal = var.lb_type == "internal"
