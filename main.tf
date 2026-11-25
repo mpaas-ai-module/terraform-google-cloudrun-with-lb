@@ -122,7 +122,7 @@ locals {
 
 resource "google_compute_region_network_endpoint_group" "neg" {
   name                  = "${var.cloudrun_name}-neg"
-  project               = var.project
+  project               = var.host_project_id
   region                = var.cloudrun_location
   network_endpoint_type = "SERVERLESS"
 
