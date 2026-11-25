@@ -122,7 +122,7 @@ locals {
 
 resource "google_compute_region_network_endpoint_group" "neg" {
   name                  = "${var.cloudrun_name}-neg"
-  project               = var.host_project_id
+  project               = var.project
   region                = var.cloudrun_location
   network_endpoint_type = "SERVERLESS"
 
@@ -264,7 +264,7 @@ resource "google_compute_global_address" "external_ip" {
 resource "google_compute_address" "internal_ip" {
   count        = local.is_internal ? 1 : 0
   name         = "${var.cloudrun_name}-ip"
-  project      = var.project
+  project      = var.host_project_id
   region       = var.cloudrun_location
   address_type = "INTERNAL"
   subnetwork   = var.subnetwork
